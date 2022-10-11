@@ -87,7 +87,7 @@ download: |
   from PIL import Image
   from tqdm import tqdm
 
-  from utils.datasets import autosplit
+  from utils.dataloaders import autosplit
   from utils.general import download, xyxy2xywhn
 
 
@@ -150,4 +150,4 @@ download: |
   Path(dir / 'val_images').rename(dir / 'images' / 'val')
 
   # Split
-  autosplit(dir / 'images' / 'train')
+  autosplit(dir / 'images' / 'train', weights=(0.7, 0.1, 0.2))

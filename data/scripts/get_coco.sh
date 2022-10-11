@@ -20,7 +20,7 @@ if [ "$#" -gt 0 ]; then
 else
   train=true
   val=true
-  test=false
+  test=true
   segments=false
 fi
 
