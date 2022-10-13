@@ -7,9 +7,12 @@ from matplotlib.offsetbox import TextArea, AnnotationBbox
 from argparse import Namespace
 import yaml
 from pathlib import Path
+from sklearn.base import clone
+from sklearn.isotonic import IsotonicRegression
+from sklearn.calibration import _SigmoidCalibration
 
 from models.common import DetectMultiBackend
-from utils.general import (check_dataset, xywh2xyxy, Profile, check_img_size, colorstr, scale_boxes, non_max_suppression, increment_path)
+from utils.general import (check_dataset, xywh2xyxy, Profile, check_img_size, colorstr, scale_boxes, non_max_suppression)
 from utils.torch_utils import select_device
 from utils.dataloaders import create_dataloader
 
@@ -40,16 +43,11 @@ def get_data_pred(preds_, chosen_dict, image_path, name, num_classes):
 
 # Put the predictions in a dictionnary (preds before and after NMS)
 def setup_data_model(opt, ROOT):
-    with open(opt) as f:
-        opt = Namespace(**yaml.safe_load(f))
-
     # Directories
     data = ROOT / opt.data  # dataset.yaml path
     with open(data) as f:
         opt_data = Namespace(**yaml.safe_load(f))
-    test_path = opt_data.test
-    save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok)  # increment run
-    (save_dir / 'labels' if opt.save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+    # (save_dir / 'labels' if opt.save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Load model
     weights = ROOT / opt.weights  # model path or triton URL
@@ -65,8 +63,8 @@ def setup_data_model(opt, ROOT):
     # Data
     data = check_dataset(data)  # check
     nc = 1 if opt.single_cls else int(opt_data.nc)  # number of classes
-    names = {0: 'item'} if opt.single_cls and len(opt_data.names) != 1 else opt_data.names  # class names
-    names = model.names if hasattr(model, 'names') else model.module.names  # get class names
+    # names = {0: 'item'} if opt.single_cls and len(opt_data.names) != 1 else opt_data.names  # class names
+    # names = model.names if hasattr(model, 'names') else model.module.names  # get class names
 
     # Other
     dt = Profile(), Profile(), Profile()  # profiling times
@@ -82,13 +80,13 @@ def setup_data_model(opt, ROOT):
                                     workers=opt.workers,
                                     prefix=colorstr(f'{task}: '))[0]
                                 
-    return dataloader, model, opt, device, dt
+    return dataloader, model, device, dt
 
 def get_yolo_predictions(dataloader, model, opt, device, dt):
     data_dict = {}
     nc = model.model.nc
     pbar = tqdm(dataloader, desc=('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95'), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-    for (im, targets, paths, shapes) in enumerate(pbar):
+    for im, targets, paths, shapes in pbar:
         with dt[0]:
             if device.type != 'cpu':
                 im = im.to(device, non_blocking=True)
@@ -111,12 +109,12 @@ def get_yolo_predictions(dataloader, model, opt, device, dt):
         with dt[2]:
             preds_nms = non_max_suppression(
                 preds,
-                opt.conf_thres,
-                opt.iou_thres,
+                opt.conf_thres_nms,
+                opt.iou_thres_nms,
                 labels=lb,
                 multi_label=opt.multi_label_nms,
                 agnostic=opt.agnostic_nms,
-                max_det=opt.max_det,
+                max_det=opt.max_det_nms,
                 output_confs=True,
                 )
 
@@ -135,7 +133,7 @@ def get_yolo_predictions(dataloader, model, opt, device, dt):
             
         # Normal predictions
         data_dict[paths[0]]['pred_bbox_xywh'] = preds[0][:, :4].clone().cpu().numpy()
-        get_data_pred(preds_[0], data_dict, paths, "pred", num_classes=nc)
+        get_data_pred(preds_[0], data_dict, paths, "before_nms", num_classes=nc)
         
 
         for si, pred_nms_ in enumerate(preds_nms):
@@ -190,12 +188,16 @@ def calib_prep(dict_, where_apply_calib, num_classes, device, conf_thres=0.02, i
         if num_obj_==0:
             pass
         else:
-            dict_[image_path]["idx"] = objectness_idx  
+            dict_[image_path]["idx"] = objectness_idx
+            dict_[image_path]["pred_bbox_xywh"+"_idx"] = dict_[image_path]["pred_bbox_xywh"][objectness_idx]
+            dict_[image_path][obj_conf+"_idx"] = dict_[image_path][obj_conf][objectness_idx]
+            dict_[image_path][class_conf+"_idx"] = dict_[image_path][class_conf][objectness_idx]
+            
             iou_cross = box_iou(
                 torch.tensor(dict_[image_path][bbox_pred][objectness_idx], device=device),
                 torch.tensor(dict_[image_path]["true_bbox_xyxy_scaled"], device=device)
-            ).cpu().numpy() 
-                            
+            ).cpu().numpy()
+
             # We want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox.
             if obj_calib is True:
                 iou_cross_bool = (iou_cross > iou_thres_obj).astype(int)
@@ -239,14 +241,13 @@ def collect_data_obj(dict_, where_apply_calib):
         Two arrays with all the uncalibrated y's and "true" y's.
         If plots is true, then, the size of the bboxs and the image id are also saved.
     """
-    obj_conf = where_apply_calib+"_obj_score"
+    obj_conf = where_apply_calib+"_obj_score"+"_idx"
     obj_y_pred, obj_y_true = [], []
     for path in dict_:
         values_ = dict_[path]
-        if "idx" in values_.keys():
-            idx = values_["idx"]
+        if obj_conf in values_.keys():
             obj_y_true.extend(values_[where_apply_calib+"_obj_y_true"])
-            obj_y_pred.extend(values_[obj_conf][idx].ravel())    
+            obj_y_pred.extend(values_[obj_conf].ravel())    
     return obj_y_pred, obj_y_true
 
 
@@ -291,12 +292,12 @@ def predict_obj_conf(dict_, calibrators_fitted, where_apply_calib):
     _type_
         Calibrated objectness values.
     """
+    obj_conf = where_apply_calib+"_obj_score"+"_idx"
     all_y_calib = []
     for path in dict_:
         values_ = dict_[path]
-        if "idx" in values_.keys():
-            idx = values_["idx"]
-            obj_score_ = values_[where_apply_calib+"_obj_score"][idx]
+        if obj_conf in values_.keys():
+            obj_score_ = values_[obj_conf]
             preds_ = calibrators_fitted.predict(obj_score_)
             dict_[path][where_apply_calib+"_calib_obj_score"] = preds_.reshape(-1, 1)
             all_y_calib.extend(list(preds_))
@@ -464,3 +465,291 @@ def draw_reliability_graph(y_score, y_true, num_bins, strategy, title, axs=None,
     if axs is None:
         plt.show()
 
+def create_pred_for_nms(values_, name_preds, device):
+    """
+    Re-creating the predictions using the calibrated values.
+
+    Parameters
+    ----------
+    path : _type_
+        The path to the image that you want to create the NMS preciction.
+    chosen_dict : _type_
+        Dictionnary where you can find the values for the bbox and class.
+    chosen_dict_obj : _type_
+        Dictionnary where you can find the calibrated values for objectness.
+    bbox_name : _type_
+        Name of the variable for which you should look for bbox coordinate values. 
+    obj_name : _type_
+        Name of the variable for which you should look for objectness confidence values. 
+    class_name : _type_
+        Name of the variable for which you should look for class confidence values. 
+
+    Returns
+    ------
+    _type_
+        The tensor prediction object for this image path.
+    """
+    bbox_ = torch.tensor(values_[name_preds[0]], device=device)
+    obj_ = torch.tensor(values_[name_preds[1]].reshape(-1, 1), device=device)
+    class_ = torch.tensor(values_[name_preds[2]], device=device)
+    
+    pred_ = torch.cat((bbox_, obj_, class_), dim=1)
+    pred_ = torch.reshape(pred_, [1, pred_.shape[0], pred_.shape[1]])
+    return pred_
+
+def NMS(dataloader, dict_, name_preds, save_after_nms, num_classes, opt, device):
+    """
+    Create the tensor and pass the tensor through the NMS
+
+    Parameters
+    ----------
+    dataloader : _type_
+        The dataloader from loading all the pictures.
+    chosen_dict : _type_
+        Dictionnary where you can find the values for the bbox and class.
+    chosen_dict_obj : _type_
+        Dictionnary where you can find the calibrated values for objectness.
+    before_nms : list, optional
+        List with the names of the variables for which you should look for coordinates of the bbox, the objectness and class confidence values, by default ["pred_bbox", "calib_obj_conf", "pred_class_conf"]
+    save_after_nms : str, optional
+        The name of the saved variables in the dictionnary, by default "after_nms_calib"
+    """
+    for im, targets, path, shapes in tqdm(dataloader):
+        path = path[0]
+        if path in dict_:
+            values_ = dict_[path]
+            if "idx" in values_.keys():
+                if device.type != 'cpu':
+                    im = im.to(device, non_blocking=True)
+                    targets = targets.to(device)
+                im = im.half() if opt.half else im.float()  # uint8 to fp16/32
+                im /= 255  # 0 - 255 to 0.0 - 1.0
+                nb, _, height, width = im.shape  # batch size, channels, height, width
+
+                pred_ = create_pred_for_nms(dict_[path], name_preds, device=device)
+
+                preds_nms_ = non_max_suppression(
+                    pred_,
+                    opt.conf_thres_nms,
+                    opt.iou_thres_nms,
+                    labels=[],
+                    multi_label=opt.multi_label_nms,
+                    agnostic=opt.agnostic_nms,
+                    max_det=opt.max_det_nms,
+                    output_confs=True
+                )
+
+                # Statistics per image
+                for si, pred_nms_ in enumerate(preds_nms_):
+                    scale_boxes(im[si].shape[1:], pred_nms_[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
+
+                get_data_pred(preds_nms_[0], dict_, path, save_after_nms, num_classes)
+
+
+
+
+
+
+def collect_data_class(dict_, num_classes, where_apply_calib):
+    """
+    Collecting all the class confidences as a single object to calibrate.
+    """
+    class_conf = where_apply_calib+"_class_score"+"_idx"
+    obj_y_true = np.zeros((0, num_classes))
+    obj_y_pred = np.zeros((0, num_classes))
+    
+    for path in dict_:
+        values_ = dict_[path]
+        if class_conf in values_.keys():
+            obj_y_true = np.vstack([obj_y_true, np.vstack(values_[where_apply_calib+"_class_y_true"]).T])
+            obj_y_pred = np.vstack([obj_y_pred, np.vstack(values_[class_conf])])
+    return obj_y_true, obj_y_pred
+
+def my_resample(X, y, perc):
+    """
+    Resampling method before calibration.
+
+    Parameters
+    ----------
+    X : _type_
+        The values that will be used as the training X.
+    y : _type_
+        The values that will be used as the training X.
+    perc : _type_
+        Percentage of true values that you want to have in the resampled X and y.
+
+    Returns
+    -------
+    _type_
+        X_res and y_res resampled according to the method defined in the function.
+    """
+    n = len(y)
+    y1_idx = np.where(y==1)[0]
+    y0_idx = np.where(y==0)[0]
+
+    if len(y1_idx)/n>0.5:
+        return X, y
+    else:
+        n_perc = int((1-perc)*len(y0_idx))
+        y0_idx_chosen = np.random.choice(y0_idx, size=n_perc, replace=False)
+        idx = np.append(y0_idx_chosen, y1_idx)
+        y_res = y[idx]
+        X_res = X[idx]
+    
+        #sm = imblearn.over_sampling.SMOTE(sampling_strategy=perc)
+        #X_res, y_res = sm.fit_resample(X.reshape(-1, 1), y.reshape(-1, 1))
+        return X_res, y_res
+
+def fitting_class_calibrators(y_true_calib, y_pred_calib, calibrator, num_classes, perc=0.5):
+    """
+    Fitting calibrators for the classes.
+
+    Parameters
+    ----------
+    y_true_calib : _type_
+        The true values to be used as the dependent variable in the calibration.
+    y_pred_calib : _type_
+        The X values to be used in the calibration.
+    calibrator : _type_, optional
+        The calibrator to be used for calibration of the values
+    num_classes : int, optional
+        The number of classes that can be predicted in the dataset, by default 4
+    perc : float, optional
+        Percentage of true values that you want to have in the resampled X and y, by default 0.5
+
+    Returns
+    -------
+    _type_
+        List of 4 estimators, the calibrators for each class.
+    """        
+    calibrators = []
+    for number in range(num_classes):
+        cloned_calibrator = clone(calibrator)
+        X, y = my_resample(y_pred_calib[:, number], y_true_calib[:, number], perc=perc)
+        cloned_calibrator.fit(X, y)
+        calibrators.append(cloned_calibrator)
+    return calibrators
+
+def predict_class_conf(dict_, calibrators_fitted, num_classes, where_apply_calib):
+    """
+    Class predictions using the fitted calibrators. 
+
+    Parameters
+    ----------
+    chosen_dict_obj : _type_
+        Dictionnary where to get the predictions to be calibrated.
+    chosen_dict_class : _type_
+        Dictionnary where you want to save the calibrated values.
+    calibrators_fitted : _type_
+        Fitted calibrator for each class.
+    where_apply : str, optional
+        Determines the name of the observations to use when calibrating, by default "after_nms_calib"
+    before_nms : _type_, optional
+        If you want to calibrate before NMS, then use this dictionnary to show where to find the class confidence values, by default None
+    num_classes : int, optional
+        The number of classes that can be predicted in the dataset, by default 4
+
+    Returns
+    -------
+    _type_
+        Calibrated class confidence values.
+    """
+    class_conf = where_apply_calib+"_class_score"+"_idx"
+    all_y_calib = {}
+    for number in range(num_classes):
+        all_y_calib[number]= []
+
+    for path in dict_:
+        values_ = dict_[path]
+        if class_conf in values_.keys():
+            pred_values_ = dict_[path][class_conf]
+            class_y_calib = []
+            for number in range(num_classes):
+                preds_ = calibrators_fitted[number].predict(pred_values_[:, number])
+                class_y_calib.append(preds_)
+                all_y_calib[number].extend(list(preds_))
+            dict_[path][where_apply_calib+"_calib_class_score"] = np.vstack(class_y_calib).T
+
+    return np.vstack(list(all_y_calib.values())).T
+
+def get_calibrator(name):
+    available_calibrators = {
+        "isotonic": IsotonicRegression(out_of_bounds="clip"), # Isotonic Regression
+        "platt": _SigmoidCalibration(),
+    }
+    return available_calibrators[name]
+
+def calibration(
+    calib_location,
+    calib_obj,
+    calib_class,
+    calib_dict,
+    test_dict,
+    calibrator,
+    conf_thres,
+    iou_thres_obj,
+    iou_thres_class,
+    dataloader,
+    opt,
+    num_classes,
+    device
+    ):
+    if (calib_obj is True) or (calib_class is True):
+        calib_prep(
+            calib_dict,
+            where_apply_calib=calib_location,
+            num_classes=num_classes,
+            device=device,
+            conf_thres=conf_thres,
+            iou_thres_obj=iou_thres_obj,
+            iou_thres_class=iou_thres_class,
+            obj_calib=calib_obj,
+            class_calib=calib_class
+        )
+
+        calib_prep(
+            test_dict,
+            where_apply_calib=calib_location,
+            num_classes=num_classes,
+            device=device,
+            conf_thres=conf_thres,
+            iou_thres_obj=iou_thres_obj,
+            iou_thres_class=iou_thres_class,
+            obj_calib=calib_obj,
+            class_calib=calib_class
+        )
+
+        # Calibration OBJ
+        if calib_obj:
+            print("calib obj")
+            obj_y_pred_CALIB, obj_y_true_CALIB = collect_data_obj(calib_dict, where_apply_calib=calib_location)
+            fitted_calibrator = fitting_obj_calibrators(obj_y_true_CALIB, obj_y_pred_CALIB, calibrator)
+            _ = predict_obj_conf(test_dict, fitted_calibrator, where_apply_calib=calib_location)
+
+        if calib_class:
+            print("calib class")
+            list_y_true_calib, list_y_pred_calib = collect_data_class(calib_dict, num_classes=num_classes, where_apply_calib=calib_location)
+            calibrators_fitted = fitting_class_calibrators(list_y_true_calib, list_y_pred_calib, calibrator, num_classes=num_classes, perc=0.6)
+            _ = predict_class_conf(test_dict, calibrators_fitted, num_classes, calib_location)
+
+        if calib_location=="before_nms":
+            print("running NMS")
+            if calib_obj:
+                _ = predict_obj_conf(calib_dict, fitted_calibrator, where_apply_calib=calib_location)
+                name_pred_obj = calib_location+"_calib_obj_score"
+            else:
+                name_pred_obj = calib_location+"_obj_score_idx"
+
+            if calib_class:
+                _ = predict_class_conf(calib_dict, calibrators_fitted, num_classes, calib_location)
+                name_pred_class = calib_location+"_calib_class_score"
+            else:
+                name_pred_class = calib_location+"_class_score_idx"
+
+            name_preds = ["pred_bbox_xywh_idx", name_pred_obj, name_pred_class]
+            print("nms calib")
+            NMS(dataloader, calib_dict, name_preds=name_preds, save_after_nms="after_nms_calib", num_classes=num_classes, opt=opt, device=device)
+
+            print("nms test")
+            NMS(dataloader, test_dict, name_preds=name_preds, save_after_nms="after_nms_calib", num_classes=num_classes, opt=opt, device=device)
+            

@@ -41,7 +41,7 @@ names:
   17: sofa
   18: train
   19: tvmonitor
-
+nc: 20
 
 # Download script/URL (optional) ---------------------------------------------------------------------------------------
 download: |

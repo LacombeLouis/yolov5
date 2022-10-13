@@ -3,11 +3,11 @@ version: S
 task: 'test'  # train, val, test, speed or study
 
 # weights
-weights: 'runs/train/visdrone/weights/best.pt'  # model path or triton URL
-data: 'data/VisDrone.yaml'  # dataset.yaml path
+weights: 'runs/train/VOC/weights/best.pt'  # model path or triton URL
+data: 'data/VOC.yaml'  # dataset.yaml path
 
 # hyp
-hyp: 'runs/train/visdrone/hyp.yaml'
+hyp: 'runs/train/VOC/hyp.yaml'
 
 # Detect
 batch_size: 32  # batch size
@@ -22,7 +22,7 @@ save_hybrid: False  # save label+prediction hybrid results to *.txt
 save_conf: False  # save confidences in --save-txt labels
 save_json: False  # save a COCO-JSON results file
 project: '../RESULTS'  # save to project/name
-name: 'VisDrone'  # save to project/name
+name: 'VOC'  # save to project/name
 exist_ok: False  # existing project/name ok, do not increment
 
 # Other
