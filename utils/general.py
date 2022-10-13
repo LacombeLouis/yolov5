@@ -19,7 +19,7 @@ import time
 import urllib
 from copy import deepcopy
 from datetime import datetime
-from itertools import repeat
+from itertools import repeat, islice
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from subprocess import check_output
@@ -618,6 +618,26 @@ def make_divisible(x, divisor):
     return math.ceil(x / divisor) * divisor
 
 
+def weight_to_int(weights, len_):
+    weights = np.array(weights)
+    if np.sum(weights) != 1:
+        raise ValueError("The sum of the weights need to be equal to 1.")
+    else:
+        weights_to_int_ = np.ceil(weights*len_).astype(int)
+
+    while np.sum(weights_to_int_)>len_:
+        idx = np.random.choice(np.arange(len(weights)))
+        weights_to_int_[idx] += -1
+    return weights_to_int_
+ 
+
+def split_dict(dict_, weights):    
+    length_to_split = weight_to_int(weights, len(dict_))
+    input = iter(list(dict_.items()))
+    output = [dict(islice(input, elem)) for elem in length_to_split]
+    return output
+
+
 def clean_str(s):
     # Cleans a string by replacing special characters with underscore _
     return re.sub(pattern="[|@#!¡·$€%&()=?¿^*;:,¨´><+]", repl="_", string=s)
@@ -832,7 +852,8 @@ def non_max_suppression(
         multi_label=False,
         labels=(),
         max_det=300,
-        nm=0,  # number of masks
+        nm=0,  # number of masks,
+        output_confs=False
 ):
     """Non-Maximum Suppression (NMS) on inference results to reject overlapping detections
 
@@ -886,7 +907,9 @@ def non_max_suppression(
             continue
 
         # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
+        obj_conf_copy = x[:, 4:5].clone() # Real object confidence cloned
+        class_conf_copy = x[:, 5:].clone() # Real class confidence
+        x[:, 5:] *= x[:, 4:5]
 
         # Box/Mask
         box = xywh2xyxy(x[:, :4])  # center_x, center_y, width, height) to (x1, y1, x2, y2)
@@ -895,10 +918,16 @@ def non_max_suppression(
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:
             i, j = (x[:, 5:mi] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, 5 + j, None], j[:, None].float(), mask[i]), 1)
+            if output_confs : 
+                x = torch.cat((box[i], x[i, 5 + j, None], j[:, None].float(), mask[i], obj_conf_copy, class_conf_copy), 1)
+            else:
+                x = torch.cat((box[i], x[i, 5 + j, None], j[:, None].float(), mask[i]), 1)
         else:  # best class only
             conf, j = x[:, 5:mi].max(1, keepdim=True)
-            x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
+            if output_confs : 
+                x = torch.cat((box, conf, j.float(), mask, obj_conf_copy, class_conf_copy), 1)[conf.view(-1) > conf_thres]
+            else:
+                x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
 
         # Filter by class
         if classes is not None:
