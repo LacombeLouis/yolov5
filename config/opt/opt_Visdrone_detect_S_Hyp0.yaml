@@ -9,6 +9,9 @@ data: 'data/VisDrone.yaml'  # dataset.yaml path
 # hyp
 hyp: 'runs/train/visdrone/hyp.yaml'
 
+# Calibration
+num_bins: 50
+
 # Detect
 batch_size: 32  # batch size
 imgsz: 640  # inference size (height, width)

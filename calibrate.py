@@ -41,11 +41,30 @@ def run(
         split_calib_test=(0.3, 0.7),
         speed_info=False,
         save_dict=True,
+        plots=True,
 ):
     with open(config) as f:
         config = Namespace(**yaml.safe_load(f))
     dataloader, model, device, dt = setup_data_model(config, ROOT)
     num_classes = model.model.nc
+
+    now = datetime.datetime.now()
+    save_dir = increment_path(Path(config.project) / config.name / f'calibrate_{str(now.year).zfill(4)}_{str(now.month).zfill(2)}_{str(now.day).zfill(2)}__{str(now.hour).zfill(2)}_{str(now.minute).zfill(2)}', exist_ok=config.exist_ok, mkdir=True)  # increment run
+    
+    d_ = {
+        "conf_thres": conf_thres,
+        "iou_thres_obj": iou_thres_obj,
+        "iou_thres_class": iou_thres_class,
+        "where_apply_calib_obj": where_apply_calib_obj,
+        "where_apply_calib_class": where_apply_calib_class,
+        "calibrator": calibrator,
+        "split_calib_test": split_calib_test,
+    }
+    with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
+        yaml.dump(d_, file)
+
+    with open(os.path.join(save_dir, 'config.yaml'), 'w') as file:
+        yaml.dump(config, file)
 
     dt = Profile(), Profile(), Profile()
     with dt[0]:
@@ -59,6 +78,12 @@ def run(
     LOGGER.info(f'\nStarting the calibrations: {calib_location}...')
     calib_obj = (where_apply_calib_obj == calib_location)
     calib_class = (where_apply_calib_class == calib_location)
+
+    if plots:
+        os.mkdir(os.path.join(save_dir, "images"))
+        plots = os.path.join(save_dir, "images")
+    else:
+        plots = None
 
     with dt[1]:
         calibration(
@@ -74,7 +99,8 @@ def run(
             dataloader,
             config,
             num_classes,
-            device
+            device,
+            plots
         )
 
     calib_location = "after_nms"
@@ -96,7 +122,8 @@ def run(
             dataloader,
             config,
             num_classes,
-            device
+            device,
+            plots,
         )
 
     # Print speeds
@@ -105,8 +132,6 @@ def run(
         LOGGER.info(f'Speed: %.1fms inference, %.1fms before NMS, %.1fms after NMS' % t)
 
     if save_dict:
-        now = datetime.datetime.now()
-        save_dir = increment_path(Path(config.project) / config.name / f'{str(now.year).zfill(4)}_{str(now.month).zfill(2)}_{str(now.day).zfill(2)}__{str(now.hour).zfill(2)}_{str(now.minute).zfill(2)}__obj_{where_apply_calib_obj}__class_{where_apply_calib_class}', exist_ok=config.exist_ok, mkdir=True)  # increment run
         with open(f'{save_dir}/calib_dict.pickle', 'wb') as f:
             pickle.dump(calib_dict, f)
         with open(f'{save_dir}/test_dict.pickle', 'wb') as f:
@@ -126,6 +151,7 @@ def parse_opt():
     parser.add_argument('--split_calib_test', default=(0.3, 0.7), help='the split for the dataset')
     parser.add_argument('--speed_info', type=bool, default=False, help='details of the speed')
     parser.add_argument('--save_dict', type=bool, default=True, help='should you save the results')
+    parser.add_argument('--plots', type=bool, default=True, help='save the ECE plots')
     opt = parser.parse_args()
     print_args(vars(opt))
     return opt

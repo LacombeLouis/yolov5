@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.metrics import box_iou
@@ -248,7 +249,7 @@ def collect_data_obj(dict_, where_apply_calib):
         if obj_conf in values_.keys():
             obj_y_true.extend(values_[where_apply_calib+"_obj_y_true"])
             obj_y_pred.extend(values_[obj_conf].ravel())    
-    return obj_y_pred, obj_y_true
+    return obj_y_true, obj_y_pred
 
 
 def fitting_obj_calibrators(y_true_calib, y_pred_calib, calibrator):
@@ -357,6 +358,7 @@ def calc_bins(y_score, y_true, num_bins, strategy):
         Multiple arrays, the upper and lower bound of each bins, indices of 
         y that belong to each bins, the accuracy, confidecne and size of each bins.
     """
+    y_score, y_true = np.array(y_score), np.array(y_true)
     bins, binned = get_binning_groups(y_score, num_bins, strategy)
     bin_accs = np.zeros(num_bins)
     bin_confs = np.zeros(num_bins)
@@ -402,7 +404,7 @@ def get_metrics(y_score, y_true, num_bins, strategy):
 
 
 # Plots
-def draw_reliability_graph(y_score, y_true, num_bins, strategy, title, axs=None, sav=None):
+def draw_reliability_graph(y_score, y_true, num_bins, strategy, title, axs=None):
     """
     Plotting the accuracy and confidence per bins and showing the values of ECE and MCE.
 
@@ -458,9 +460,6 @@ def draw_reliability_graph(y_score, y_true, num_bins, strategy, title, axs=None,
     )
     
     ax.add_artist(ab)
-    
-    if sav is not None:
-        plt.savefig(sav+".png")
     
     if axs is None:
         plt.show()
@@ -692,7 +691,8 @@ def calibration(
     dataloader,
     opt,
     num_classes,
-    device
+    device,
+    plots,
     ):
     if (calib_obj is True) or (calib_class is True):
         calib_prep(
@@ -722,26 +722,41 @@ def calibration(
         # Calibration OBJ
         if calib_obj:
             print("calib obj")
-            obj_y_pred_CALIB, obj_y_true_CALIB = collect_data_obj(calib_dict, where_apply_calib=calib_location)
-            fitted_calibrator = fitting_obj_calibrators(obj_y_true_CALIB, obj_y_pred_CALIB, calibrator)
-            _ = predict_obj_conf(test_dict, fitted_calibrator, where_apply_calib=calib_location)
+            obj_y_true_CALIB, obj_y_pred_CALIB = collect_data_obj(calib_dict, where_apply_calib=calib_location)
+            obj_fitted_calibrators = fitting_obj_calibrators(obj_y_true_CALIB, obj_y_pred_CALIB, calibrator)
+            obj_y_pred_CALIBRATED = predict_obj_conf(test_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
+            if plots is not None:
+                fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
+                obj_y_true_TEST, obj_y_pred_TEST = collect_data_obj(test_dict, where_apply_calib=calib_location)
+                draw_reliability_graph(obj_y_pred_TEST, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
+                draw_reliability_graph(obj_y_pred_CALIBRATED, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
+                sav_fig_name = os.path.join(plots, "plot_ece_obj_"+calib_location+".png")
+                plt.savefig(sav_fig_name)
 
         if calib_class:
             print("calib class")
-            list_y_true_calib, list_y_pred_calib = collect_data_class(calib_dict, num_classes=num_classes, where_apply_calib=calib_location)
-            calibrators_fitted = fitting_class_calibrators(list_y_true_calib, list_y_pred_calib, calibrator, num_classes=num_classes, perc=0.6)
-            _ = predict_class_conf(test_dict, calibrators_fitted, num_classes, calib_location)
-
+            class_y_true_CALIB, class_y_pred_CALIB = collect_data_class(calib_dict, num_classes=num_classes, where_apply_calib=calib_location)
+            class_fitted_calibrators = fitting_class_calibrators(class_y_true_CALIB, class_y_pred_CALIB, calibrator, num_classes=num_classes, perc=0.6)
+            class_y_pred_CALIBRATED = predict_class_conf(test_dict, class_fitted_calibrators, num_classes, calib_location)
+            if plots is not None:
+                for i in range(num_classes):
+                    fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
+                    class_y_true_TEST, class_y_pred_TEST = collect_data_class(test_dict, num_classes=num_classes, where_apply_calib=calib_location)
+                    draw_reliability_graph(class_y_pred_TEST[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
+                    draw_reliability_graph(class_y_pred_CALIBRATED[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
+                    sav_fig_name = os.path.join(plots, "plot_ece_class"+str(i)+"_"+calib_location+".png")
+                    plt.savefig(sav_fig_name)
+                
         if calib_location=="before_nms":
             print("running NMS")
             if calib_obj:
-                _ = predict_obj_conf(calib_dict, fitted_calibrator, where_apply_calib=calib_location)
+                _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
                 name_pred_obj = calib_location+"_calib_obj_score"
             else:
                 name_pred_obj = calib_location+"_obj_score_idx"
 
             if calib_class:
-                _ = predict_class_conf(calib_dict, calibrators_fitted, num_classes, calib_location)
+                _ = predict_class_conf(calib_dict, class_fitted_calibrators, num_classes, calib_location)
                 name_pred_class = calib_location+"_calib_class_score"
             else:
                 name_pred_class = calib_location+"_class_score_idx"
