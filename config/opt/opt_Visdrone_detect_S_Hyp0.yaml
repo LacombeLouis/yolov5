@@ -13,10 +13,10 @@ hyp: 'runs/train/visdrone/hyp.yaml'
 num_bins: 50
 
 # Detect
-batch_size: 32  # batch size
+batch_size: 1  # batch size
 imgsz: 640  # inference size (height, width)
-conf_thres_nms: 0.25  # confidence threshold
-iou_thres_nms: 0.45  # NMS IOU threshold
+conf_thres_nms: 0.001  # confidence threshold
+iou_thres_nms: 0.6  # NMS IOU threshold
 max_det_nms: 1000  # maximum detections per image
 
 # Output

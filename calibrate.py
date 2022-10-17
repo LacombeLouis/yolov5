@@ -25,20 +25,20 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from utils.general import LOGGER, Profile, split_dict, increment_path, print_args
 from utils.calibration_utils import (
-    setup_data_model, get_yolo_predictions, get_calibrator, calibration
+    setup_data_model, get_yolo_predictions, get_calibrator, calibration, calc_mAP
     )
 from utils.torch_utils import  smart_inference_mode
 
 @smart_inference_mode()
 def run(
         config=ROOT / 'config/opt/opt_Visdrone_detect_S_Hyp0.yaml',  
-        conf_thres=0.25,
-        iou_thres_obj=0.45,
-        iou_thres_class=1000,
+        conf_thres=0.001,
+        iou_thres_obj=0.60,
+        iou_thres_class=0.30,
         where_apply_calib_obj='before_nms', 
         where_apply_calib_class='after_nms',
         calibrator='isotonic',
-        split_calib_test=(0.3, 0.7),
+        size_test=0.6,
         speed_info=False,
         save_dict=True,
         plots=True,
@@ -58,7 +58,9 @@ def run(
         "where_apply_calib_obj": where_apply_calib_obj,
         "where_apply_calib_class": where_apply_calib_class,
         "calibrator": calibrator,
-        "split_calib_test": split_calib_test,
+        "size_test": size_test,
+        "nc": model.model.nc,
+        "names": model.names,
     }
     with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
         yaml.dump(d_, file)
@@ -69,7 +71,7 @@ def run(
     dt = Profile(), Profile(), Profile()
     with dt[0]:
         data_dict = get_yolo_predictions(dataloader, model, config, device, dt)
-        calib_dict, test_dict = split_dict(data_dict, split_calib_test)
+        calib_dict, test_dict = split_dict(data_dict, size_test)
         print("Length calib dict: ", len(calib_dict), " and length calib dict: ", len(test_dict))
 
     calibrator = get_calibrator(calibrator)
@@ -79,6 +81,9 @@ def run(
     calib_obj = (where_apply_calib_obj == calib_location)
     calib_class = (where_apply_calib_class == calib_location)
 
+    names = ["after_nms_bbox_xyxy_scaled", "after_nms_obj_score", "after_nms_class_score"]
+    names_after = ["after_nms_bbox_xyxy_scaled", "after_nms_obj_score_idx", "after_nms_class_score_idx"]
+
     if plots:
         os.mkdir(os.path.join(save_dir, "images"))
         plots = os.path.join(save_dir, "images")
@@ -86,7 +91,8 @@ def run(
         plots = None
 
     with dt[1]:
-        calibration(
+        names_after = calibration(
+            names_after,
             calib_location,
             calib_obj,
             calib_class,
@@ -109,7 +115,8 @@ def run(
     calib_class = (where_apply_calib_class == calib_location)
 
     with dt[2]:
-        calibration(
+        names_after = calibration(
+            names_after,
             calib_location,
             calib_obj,
             calib_class,
@@ -133,22 +140,29 @@ def run(
 
     if save_dict:
         with open(f'{save_dir}/calib_dict.pickle', 'wb') as f:
-            pickle.dump(calib_dict, f)
+            pickle.dump(calib_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
         with open(f'{save_dir}/test_dict.pickle', 'wb') as f:
-            pickle.dump(test_dict, f)
+            pickle.dump(test_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print("Original Results")
+    calc_mAP(save_dir, names, device, plots=False)
+
+    print(names_after)
+    print("Calibrated results: objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
+    calc_mAP(save_dir, names_after, device, plots=False)
 
 
 
 def parse_opt():
     parser = ArgumentParser()
     parser.add_argument('--config', type=str, default=ROOT / 'config/opt/opt_Visdrone_detect_S_Hyp0.yaml', help='config_file.yaml path')
-    parser.add_argument('--conf_thres', type=float, default=0.25, help='confidence threshold')
+    parser.add_argument('--conf_thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--iou_thres_obj', type=float, default=0.6, help='Objectness IoU threshold')
     parser.add_argument('--iou_thres_class', type=float, default=0.3, help='Class IoU threshold')
     parser.add_argument('--where_apply_calib_obj', type=str, default='before_nms', help='where to apply objectness calibration')
     parser.add_argument('--where_apply_calib_class', type=str, default='after_nms', help='where to apply class calibration')
     parser.add_argument('--calibrator', type=str, default='isotonic', help='which calibrator to use')
-    parser.add_argument('--split_calib_test', default=(0.3, 0.7), help='the split for the dataset')
+    parser.add_argument('--size_test', type=float, default=0.6, help='the split for the dataset')
     parser.add_argument('--speed_info', type=bool, default=False, help='details of the speed')
     parser.add_argument('--save_dict', type=bool, default=True, help='should you save the results')
     parser.add_argument('--plots', type=bool, default=True, help='save the ECE plots')

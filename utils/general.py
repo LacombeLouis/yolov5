@@ -618,7 +618,8 @@ def make_divisible(x, divisor):
     return math.ceil(x / divisor) * divisor
 
 
-def weight_to_int(weights, len_):
+def weight_to_int(size_test, len_):
+    weights = np.array([1-size_test, size_test])
     weights = np.array(weights)
     if np.sum(weights) != 1:
         raise ValueError("The sum of the weights need to be equal to 1.")
@@ -631,8 +632,8 @@ def weight_to_int(weights, len_):
     return weights_to_int_
  
 
-def split_dict(dict_, weights):    
-    length_to_split = weight_to_int(weights, len(dict_))
+def split_dict(dict_, size_test):
+    length_to_split = weight_to_int(size_test, len(dict_))
     input = iter(list(dict_.items()))
     output = [dict(islice(input, elem)) for elem in length_to_split]
     return output

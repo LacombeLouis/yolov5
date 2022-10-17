@@ -11,13 +11,17 @@ from pathlib import Path
 from sklearn.base import clone
 from sklearn.isotonic import IsotonicRegression
 from sklearn.calibration import _SigmoidCalibration
+import pickle
+import torch
 
 from models.common import DetectMultiBackend
-from utils.general import (check_dataset, xywh2xyxy, Profile, check_img_size, colorstr, scale_boxes, non_max_suppression)
+from utils.general import (LOGGER, check_dataset, xywh2xyxy, Profile, check_img_size, colorstr, scale_boxes, non_max_suppression)
 from utils.torch_utils import select_device
 from utils.dataloaders import create_dataloader
+from utils.metrics import ap_per_class, ConfusionMatrix
+from val import process_batch
 
-import torch
+
 
 def get_data_pred(preds_, chosen_dict, image_path, name, num_classes):
     """
@@ -152,7 +156,7 @@ def get_yolo_predictions(dataloader, model, opt, device, dt):
 
 
 # Create dictionnary with the new labels, the y_true
-def calib_prep(dict_, where_apply_calib, num_classes, device, conf_thres=0.02, iou_thres_obj=0, iou_thres_class=0, obj_calib=True, class_calib=False):
+def calib_prep(dict_, where_apply_calib, num_classes, device, conf_thres, iou_thres_obj, iou_thres_class, obj_calib=True, class_calib=False):
     """
     Preparing for calibration, thereby setting the "true" y to calibrate against.
 
@@ -191,6 +195,7 @@ def calib_prep(dict_, where_apply_calib, num_classes, device, conf_thres=0.02, i
         else:
             dict_[image_path]["idx"] = objectness_idx
             dict_[image_path]["pred_bbox_xywh"+"_idx"] = dict_[image_path]["pred_bbox_xywh"][objectness_idx]
+
             dict_[image_path][obj_conf+"_idx"] = dict_[image_path][obj_conf][objectness_idx]
             dict_[image_path][class_conf+"_idx"] = dict_[image_path][class_conf][objectness_idx]
             
@@ -496,7 +501,7 @@ def create_pred_for_nms(values_, name_preds, device):
     pred_ = torch.reshape(pred_, [1, pred_.shape[0], pred_.shape[1]])
     return pred_
 
-def NMS(dataloader, dict_, name_preds, save_after_nms, num_classes, opt, device):
+def NMS(dataloader, dict_, name_preds, num_classes, opt, device):
     """
     Create the tensor and pass the tensor through the NMS
 
@@ -542,7 +547,7 @@ def NMS(dataloader, dict_, name_preds, save_after_nms, num_classes, opt, device)
                 for si, pred_nms_ in enumerate(preds_nms_):
                     scale_boxes(im[si].shape[1:], pred_nms_[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
 
-                get_data_pred(preds_nms_[0], dict_, path, save_after_nms, num_classes)
+                get_data_pred(preds_nms_[0], dict_, path, "after_nms", num_classes)
 
 
 
@@ -679,6 +684,7 @@ def get_calibrator(name):
     return available_calibrators[name]
 
 def calibration(
+    names,
     calib_location,
     calib_obj,
     calib_class,
@@ -721,10 +727,11 @@ def calibration(
 
         # Calibration OBJ
         if calib_obj:
-            print("calib obj")
+            print("Calibrating objectness score")
             obj_y_true_CALIB, obj_y_pred_CALIB = collect_data_obj(calib_dict, where_apply_calib=calib_location)
             obj_fitted_calibrators = fitting_obj_calibrators(obj_y_true_CALIB, obj_y_pred_CALIB, calibrator)
             obj_y_pred_CALIBRATED = predict_obj_conf(test_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
+            names[1] = "after_nms_calib_obj_score"
             if plots is not None:
                 fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
                 obj_y_true_TEST, obj_y_pred_TEST = collect_data_obj(test_dict, where_apply_calib=calib_location)
@@ -732,12 +739,14 @@ def calibration(
                 draw_reliability_graph(obj_y_pred_CALIBRATED, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                 sav_fig_name = os.path.join(plots, "plot_ece_obj_"+calib_location+".png")
                 plt.savefig(sav_fig_name)
+                plt.close()
 
         if calib_class:
-            print("calib class")
+            print("Calibrating classe scores")
             class_y_true_CALIB, class_y_pred_CALIB = collect_data_class(calib_dict, num_classes=num_classes, where_apply_calib=calib_location)
             class_fitted_calibrators = fitting_class_calibrators(class_y_true_CALIB, class_y_pred_CALIB, calibrator, num_classes=num_classes, perc=0.6)
             class_y_pred_CALIBRATED = predict_class_conf(test_dict, class_fitted_calibrators, num_classes, calib_location)
+            names[2] = "after_nms_calib_class_score"
             if plots is not None:
                 for i in range(num_classes):
                     fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
@@ -746,9 +755,10 @@ def calibration(
                     draw_reliability_graph(class_y_pred_CALIBRATED[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                     sav_fig_name = os.path.join(plots, "plot_ece_class"+str(i)+"_"+calib_location+".png")
                     plt.savefig(sav_fig_name)
+                    plt.close()
                 
         if calib_location=="before_nms":
-            print("running NMS")
+            print("Running NMS")
             if calib_obj:
                 _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
                 name_pred_obj = calib_location+"_calib_obj_score"
@@ -762,9 +772,108 @@ def calibration(
                 name_pred_class = calib_location+"_class_score_idx"
 
             name_preds = ["pred_bbox_xywh_idx", name_pred_obj, name_pred_class]
-            print("nms calib")
-            NMS(dataloader, calib_dict, name_preds=name_preds, save_after_nms="after_nms_calib", num_classes=num_classes, opt=opt, device=device)
+            NMS(dataloader, calib_dict, name_preds=name_preds, num_classes=num_classes, opt=opt, device=device)
+            NMS(dataloader, test_dict, name_preds=name_preds, num_classes=num_classes, opt=opt, device=device)
 
-            print("nms test")
-            NMS(dataloader, test_dict, name_preds=name_preds, save_after_nms="after_nms_calib", num_classes=num_classes, opt=opt, device=device)
+        return names
             
+
+def get_annotations_from_dict(dict_, device):
+    labels = []
+    for path in dict_:
+        values_ = dict_[path]
+        if "idx" in values_.keys():
+            label_ = torch.cat(
+                (
+                    torch.tensor(values_["true_class"], device=device),
+                    torch.tensor(values_["true_bbox_xyxy_scaled"], device=device),
+                ),
+                dim=1
+            )
+            labels.append(label_)
+    labels_numpy = np.vstack([x.clone().cpu().numpy() for x in labels])
+    return labels, labels_numpy
+
+
+def get_preds_from_dict(dict_, names, device):
+    detections = []
+    for path in dict_:
+        values_ = dict_[path]
+        if "idx" in values_.keys():
+            detection_ = torch.cat(
+                (
+                    torch.tensor(values_[names[0]], device=device),
+                    torch.tensor(values_[names[1]], device=device),
+                    torch.tensor(values_[names[2]], device=device),
+                ),
+                dim=1
+            )
+            detections.append(detection_)
+    detections_numpy = np.vstack([x.clone().cpu().numpy() for x in detections])
+    return detections, detections_numpy
+
+
+
+def calc_mAP(target_dir, names, device, plots=False):
+    test_dict = {}
+    file_test = os.path.join(target_dir, "test_dict.pickle")
+    if os.path.getsize(file_test) > 0:      
+        with open(file_test, "rb") as f:
+            unpickler = pickle.Unpickler(f)
+            test_dict = unpickler.load()
+
+    # names = ["after_nms"+"_bbox_xyxy_scaled", "after_nms"+"_obj_score", "after_nms"+"_class_score"]
+    test_values, _ = get_preds_from_dict(test_dict, names, device)
+    annotation_values, _ = get_annotations_from_dict(test_dict, device)
+
+    file_var = os.path.join(target_dir, "var.yaml")
+    with open(file_var) as f:
+        var = Namespace(**yaml.safe_load(f))
+
+    names = var.names
+    nc = var.nc
+    confusion_matrix = ConfusionMatrix(nc=nc)
+    iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
+    niou = iouv.numel()
+    stats = []
+    seen = 0
+
+    for si, test_ in enumerate(test_values):
+        annot_ = annotation_values[si]
+        labels = annot_[annot_[:, 0] == si, 1:]
+        nl, npr = labels.shape[0], test_.shape[0]  # number of labels, predictions
+        correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
+        seen += 1
+
+        if npr == 0:
+            if nl:
+                stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                if plots:
+                    confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+            continue
+
+        argmax_ = test_[:, 5:].clone().argmax(axis=1).reshape(-1, 1)
+        testn = torch.cat((test_[:, :5], argmax_), 1)
+        correct = process_batch(testn, annot_, iouv)
+        stats.append((correct, testn[:, 4], testn[:, 5], annot_[:, 0]))  # (correct, conf, pcls, tcls)
+
+    # Compute metrics
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    if len(stats) and stats[0].any():
+        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
+        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+    nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
+
+    # Print results
+    pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
+    LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+    if nt.sum() == 0:
+        LOGGER.warning(f'WARNING ⚠️ no labels found in calibration set, can not compute metrics without labels')
+
+    s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
+    LOGGER.info(s)
+    # Print results per class
+    if nc < 50 and nc > 1 and len(stats):
+        for i, c in enumerate(ap_class):
+            LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
