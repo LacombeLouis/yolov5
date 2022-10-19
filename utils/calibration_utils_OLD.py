@@ -21,7 +21,9 @@ from utils.dataloaders import create_dataloader
 from utils.metrics import ap_per_class, ConfusionMatrix
 from val import process_batch
 
-def get_data_pred(names, preds_, chosen_dict, image_path, num_classes):
+
+
+def get_data_pred(preds_, chosen_dict, image_path, name, num_classes):
     """
     This function uses the predictions and saves them in the dictionnary passed.
 
@@ -39,9 +41,10 @@ def get_data_pred(names, preds_, chosen_dict, image_path, num_classes):
     """
     if isinstance(image_path, list) or isinstance(image_path, tuple):
         image_path = image_path[0]
-    chosen_dict[image_path][names[0]] = preds_[:, :4].clone().cpu().numpy()
-    chosen_dict[image_path][names[1]] = preds_[:, -num_classes-1:-num_classes].clone().cpu().numpy()
-    chosen_dict[image_path][names[2]] = preds_[:, -num_classes:].clone().cpu().numpy()
+    chosen_dict[image_path][name+'_bbox_xyxy_scaled'] = preds_[:, :4].clone().cpu().numpy()
+    chosen_dict[image_path][name+'_obj_score'] = preds_[:, -num_classes-1:-num_classes].clone().cpu().numpy()
+    chosen_dict[image_path][name+'_class_score'] = preds_[:, -num_classes:].clone().cpu().numpy()
+
 
 # Put the predictions in a dictionnary (preds before and after NMS)
 def setup_data_model(opt, ROOT):
@@ -85,6 +88,7 @@ def setup_data_model(opt, ROOT):
     return dataloader, model, device, dt
 
 def get_yolo_predictions(dataloader, model, opt, device, dt):
+    count=0
     data_dict = {}
     nc = model.model.nc
     pbar = tqdm(dataloader, desc=('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95'), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -134,25 +138,29 @@ def get_yolo_predictions(dataloader, model, opt, device, dt):
             scale_boxes(im[si].shape[1:], tbox[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
             
         # Normal predictions
-        data_dict[paths[0]]['bbox_xywh'] = preds[0][:, :4].clone().cpu().numpy()
-        get_data_pred(["bbox_xyxy_scaled", "obj", "class"], preds_[0], data_dict, paths, num_classes=nc)
+        data_dict[paths[0]]['pred_bbox_xywh'] = preds[0][:, :4].clone().cpu().numpy()
+        get_data_pred(preds_[0], data_dict, paths, "before_nms", num_classes=nc)
 
         for si, pred_nms_ in enumerate(preds_nms):
             scale_boxes(im[si].shape[1:], pred_nms_[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
 
         # Normal predictions after NMS
-        get_data_pred(["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], preds_nms[0], data_dict, paths, num_classes=nc)
+        get_data_pred(preds_nms[0], data_dict, paths, "after_nms", num_classes=nc)
 
         # True images
-        data_dict[paths[0]]['annot_image_shape'] = (height, width)
-        data_dict[paths[0]]['annot_bbox_xyxy_scaled'] = tbox.clone().cpu().numpy()
-        data_dict[paths[0]]['annot_bbox'] = targets[:, 2:].clone().cpu().numpy()
-        data_dict[paths[0]]['annot_class'] = targets[:, 1:2].clone().cpu().numpy()
+        data_dict[paths[0]]['true_image_shape'] = (height, width)
+        data_dict[paths[0]]['true_bbox_xyxy_scaled'] = tbox.clone().cpu().numpy()
+        data_dict[paths[0]]['true_bbox'] = targets[:, 2:].clone().cpu().numpy()
+        data_dict[paths[0]]['true_class'] = targets[:, 1:2].clone().cpu().numpy()
+
+        if count > 10:
+            break
+        count +=1
     return data_dict
 
 
 # Create dictionnary with the new labels, the y_true
-def calib_prep(names, dict_, num_classes, device, conf_thres, iou_thres_obj, iou_thres_class, calib_location, obj_calib=True, class_calib=False):
+def calib_prep(dict_, where_apply_calib, num_classes, device, conf_thres, iou_thres_obj, iou_thres_class, obj_calib=True, class_calib=False):
     """
     Preparing for calibration, thereby setting the "true" y to calibrate against.
 
@@ -177,66 +185,54 @@ def calib_prep(names, dict_, num_classes, device, conf_thres, iou_thres_obj, iou
     num_classes : int, optional
         The number of classes that can be predicted in the dataset, by default 4
     """
-    names_copy = names.copy()
-    if obj_calib is True and class_calib is True:
-        add_name = "_OCcalib"
-    elif obj_calib is True:
-        add_name = "_Ocalib"
-    else:
-        add_name = "_Ccalib"
-
-    names = [names[0]+add_name, names[1]+add_name, names[2]+add_name, names[3]+add_name]
+    bbox_pred = where_apply_calib+"_bbox_xyxy_scaled"
+    obj_conf = where_apply_calib+"_obj_score"
+    class_conf = where_apply_calib+"_class_score"        
+                
     for i, image_path in enumerate(tqdm(dict_)):
-        objectness_idx = np.where(dict_[image_path][names_copy[1]] > conf_thres)[0]
+        objectness_idx = np.where(dict_[image_path][obj_conf] > conf_thres)[0]
         num_obj_ = len(objectness_idx)
 
         # If no bboxs have the matching criterion, then forget this image
         if num_obj_==0:
-            dict_[image_path]["has_detec"] = 0
+            pass
         else:
-            dict_[image_path]["has_detec"] = 1
-            dict_[image_path][names[0]] = dict_[image_path][names_copy[0]][objectness_idx]
-            dict_[image_path][names[1]] = dict_[image_path][names_copy[1]][objectness_idx]
-            dict_[image_path][names[2]] = dict_[image_path][names_copy[2]][objectness_idx]
+            dict_[image_path]["idx"] = objectness_idx
+            dict_[image_path]["pred_bbox_xywh"+"_idx"] = dict_[image_path]["pred_bbox_xywh"][objectness_idx]
+
+            dict_[image_path][obj_conf+"_idx"] = dict_[image_path][obj_conf][objectness_idx]
+            dict_[image_path][class_conf+"_idx"] = dict_[image_path][class_conf][objectness_idx]
             
-            if calib_location=="before_nms":
-                dict_[image_path][names[3]] = dict_[image_path][names_copy[3]][objectness_idx]
-                iou_cross = box_iou(
-                    torch.tensor(dict_[image_path][names[3]], device=device),
-                    torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
-                ).cpu().numpy()
-            else:
-                iou_cross = box_iou(
-                    torch.tensor(dict_[image_path][names[0]], device=device),
-                    torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
-                ).cpu().numpy()
+            iou_cross = box_iou(
+                torch.tensor(dict_[image_path][bbox_pred][objectness_idx], device=device),
+                torch.tensor(dict_[image_path]["true_bbox_xyxy_scaled"], device=device)
+            ).cpu().numpy()
 
             # We want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox.
             if obj_calib is True:
                 iou_cross_bool = (iou_cross > iou_thres_obj).astype(int)
                 # If there are no annotated bboxs, then all predicted bboxs are wrong.
                 if iou_cross_bool.shape[1] == 0:
-                    dict_[image_path][names[1]+"_obj_y_true"] = np.zeros(len(objectness_idx)).ravel()
+                    dict_[image_path][where_apply_calib+"_obj_y_true"] = np.zeros(len(objectness_idx)).ravel()
                 else:
-                    dict_[image_path][names[1]+"_obj_y_true"] = np.max(iou_cross_bool, axis=1).astype(np.int32).ravel()
+                    dict_[image_path][where_apply_calib+"_obj_y_true"] = np.max(iou_cross_bool, axis=1).astype(np.int32).ravel()
             
             # For each class, we want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox, then it's accurate for the class.
             if class_calib is True:
                 iou_cross_bool = (iou_cross > iou_thres_class).astype(int)
                 if iou_cross_bool.shape[1] == 0:
-                    dict_[image_path][names[2]+"_class_y_true"] = np.full((num_classes, num_obj_), 0).tolist()
+                    dict_[image_path][where_apply_calib+"_class_y_true"] = np.full((num_classes, num_obj_), 0).tolist()
                 else:
                     obj_y_true = []
-                    true_label = dict_[image_path]["annot_class"]
+                    true_label = dict_[image_path]["true_class"]
                     for number in range(num_classes):
                         true_label_bool = (true_label==number)
                         iou_and_true_label = np.max((iou_cross_bool*true_label_bool.reshape(-1, 1).T), axis=1).astype(np.int32)
                         obj_y_true.append(iou_and_true_label)
-                    dict_[image_path][names[2]+"_class_y_true"] = obj_y_true
-    return names   
+                    dict_[image_path][where_apply_calib+"_class_y_true"] = obj_y_true
 
 
-def collect_data_obj(dict_, names):
+def collect_data_obj(dict_, where_apply_calib):
     """
     Collecting all the objectness confidences as a single object to calibrate.
 
@@ -255,12 +251,12 @@ def collect_data_obj(dict_, names):
         Two arrays with all the uncalibrated y's and "true" y's.
         If plots is true, then, the size of the bboxs and the image id are also saved.
     """
-    obj_conf = names[1]
+    obj_conf = where_apply_calib+"_obj_score"+"_idx"
     obj_y_pred, obj_y_true = [], []
     for path in dict_:
         values_ = dict_[path]
         if obj_conf in values_.keys():
-            obj_y_true.extend(values_[obj_conf+"_obj_y_true"])
+            obj_y_true.extend(values_[where_apply_calib+"_obj_y_true"])
             obj_y_pred.extend(values_[obj_conf].ravel())    
     return obj_y_true, obj_y_pred
 
@@ -286,7 +282,7 @@ def fitting_obj_calibrators(y_true_calib, y_pred_calib, calibrator):
     calibrator.fit(y_pred_calib, y_true_calib)
     return calibrator
 
-def predict_obj_conf(dict_, calibrators_fitted, names):
+def predict_obj_conf(dict_, calibrators_fitted, where_apply_calib):
     """
     Objectness predictions using the fitted calibrator.
 
@@ -306,14 +302,14 @@ def predict_obj_conf(dict_, calibrators_fitted, names):
     _type_
         Calibrated objectness values.
     """
-    obj_conf = names[1]
+    obj_conf = where_apply_calib+"_obj_score"+"_idx"
     all_y_calib = []
     for path in dict_:
         values_ = dict_[path]
         if obj_conf in values_.keys():
             obj_score_ = values_[obj_conf]
             preds_ = calibrators_fitted.predict(obj_score_)
-            dict_[path][obj_conf+"_calib_obj_score"] = preds_.reshape(-1, 1)
+            dict_[path][where_apply_calib+"_calib_obj_score"] = preds_.reshape(-1, 1)
             all_y_calib.extend(list(preds_))
     return all_y_calib
 
@@ -509,7 +505,7 @@ def create_pred_for_nms(values_, name_preds, device):
     pred_ = torch.reshape(pred_, [1, pred_.shape[0], pred_.shape[1]])
     return pred_
 
-def NMS(names, dataloader, dict_, name_preds, num_classes, opt, device):
+def NMS(dataloader, dict_, name_preds, num_classes, opt, device):
     """
     Create the tensor and pass the tensor through the NMS
 
@@ -526,53 +522,56 @@ def NMS(names, dataloader, dict_, name_preds, num_classes, opt, device):
     save_after_nms : str, optional
         The name of the saved variables in the dictionnary, by default "after_nms_calib"
     """
-    names_copy = names.copy()
     for im, targets, path, shapes in tqdm(dataloader):
-        names = names_copy.copy()
         path = path[0]
-        if (path in dict_ and dict_[path]["has_detec"]==1):
-            if device.type != 'cpu':
-                im = im.to(device, non_blocking=True)
-                targets = targets.to(device)
-            im = im.half() if opt.half else im.float()  # uint8 to fp16/32
-            im /= 255  # 0 - 255 to 0.0 - 1.0
-            nb, _, height, width = im.shape  # batch size, channels, height, width
+        if path in dict_:
+            values_ = dict_[path]
+            if "idx" in values_.keys():
+                if device.type != 'cpu':
+                    im = im.to(device, non_blocking=True)
+                    targets = targets.to(device)
+                im = im.half() if opt.half else im.float()  # uint8 to fp16/32
+                im /= 255  # 0 - 255 to 0.0 - 1.0
+                nb, _, height, width = im.shape  # batch size, channels, height, width
 
-            pred_ = create_pred_for_nms(dict_[path], name_preds, device=device)
+                pred_ = create_pred_for_nms(dict_[path], name_preds, device=device)
 
-            preds_nms_ = non_max_suppression(
-                pred_,
-                opt.conf_thres_nms,
-                opt.iou_thres_nms,
-                labels=[],
-                multi_label=opt.multi_label_nms,
-                agnostic=opt.agnostic_nms,
-                max_det=opt.max_det_nms,
-                output_confs=True
-            )
+                preds_nms_ = non_max_suppression(
+                    pred_,
+                    opt.conf_thres_nms,
+                    opt.iou_thres_nms,
+                    labels=[],
+                    multi_label=opt.multi_label_nms,
+                    agnostic=opt.agnostic_nms,
+                    max_det=opt.max_det_nms,
+                    output_confs=True
+                )
 
-            # Statistics per image
-            for si, pred_nms_ in enumerate(preds_nms_):
-                scale_boxes(im[si].shape[1:], pred_nms_[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
+                # Statistics per image
+                for si, pred_nms_ in enumerate(preds_nms_):
+                    scale_boxes(im[si].shape[1:], pred_nms_[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
 
-            names[0] = names[3]+"_scaled"
-            get_data_pred(names, preds_nms_[0], dict_, path, num_classes)
+                get_data_pred(preds_nms_[0], dict_, path, "after_nms", num_classes)
 
 
-def collect_data_class(dict_, num_classes, names):
+
+
+
+
+def collect_data_class(dict_, num_classes, where_apply_calib):
     """
     Collecting all the class confidences as a single object to calibrate.
     """
-    class_conf = names[2]
+    class_conf = where_apply_calib+"_class_score"+"_idx"
     obj_y_true = np.zeros((0, num_classes))
-    obj_y_pred = np.zeros((0, num_classes))    
+    obj_y_pred = np.zeros((0, num_classes))
+    
     for path in dict_:
         values_ = dict_[path]
         if class_conf in values_.keys():
-            obj_y_true = np.vstack([obj_y_true, np.vstack(values_[class_conf+"_class_y_true"]).T])
+            obj_y_true = np.vstack([obj_y_true, np.vstack(values_[where_apply_calib+"_class_y_true"]).T])
             obj_y_pred = np.vstack([obj_y_pred, np.vstack(values_[class_conf])])
     return obj_y_true, obj_y_pred
-
 
 def my_resample(X, y, perc):
     """
@@ -639,7 +638,7 @@ def fitting_class_calibrators(y_true_calib, y_pred_calib, calibrator, num_classe
         calibrators.append(cloned_calibrator)
     return calibrators
 
-def predict_class_conf(dict_, calibrators_fitted, num_classes, names):
+def predict_class_conf(dict_, calibrators_fitted, num_classes, where_apply_calib):
     """
     Class predictions using the fitted calibrators. 
 
@@ -663,7 +662,7 @@ def predict_class_conf(dict_, calibrators_fitted, num_classes, names):
     _type_
         Calibrated class confidence values.
     """
-    class_conf = names[2]
+    class_conf = where_apply_calib+"_class_score"+"_idx"
     all_y_calib = {}
     for number in range(num_classes):
         all_y_calib[number]= []
@@ -677,7 +676,8 @@ def predict_class_conf(dict_, calibrators_fitted, num_classes, names):
                 preds_ = calibrators_fitted[number].predict(pred_values_[:, number])
                 class_y_calib.append(preds_)
                 all_y_calib[number].extend(list(preds_))
-            dict_[path][class_conf+"_calib_class_score"] = np.vstack(class_y_calib).T
+            dict_[path][where_apply_calib+"_calib_class_score"] = np.vstack(class_y_calib).T
+
     return np.vstack(list(all_y_calib.values())).T
 
 def get_calibrator(name):
@@ -698,50 +698,47 @@ def calibration(
     conf_thres,
     iou_thres_obj,
     iou_thres_class,
+    dataloader,
     opt,
     num_classes,
     device,
     plots,
     ):
     if (calib_obj is True) or (calib_class is True):
-        names_copy = names.copy()
-        names = calib_prep(
-            names,
+        calib_prep(
             calib_dict,
+            where_apply_calib=calib_location,
             num_classes=num_classes,
             device=device,
             conf_thres=conf_thres,
             iou_thres_obj=iou_thres_obj,
             iou_thres_class=iou_thres_class,
             obj_calib=calib_obj,
-            class_calib=calib_class,
-            calib_location=calib_location,
+            class_calib=calib_class
         )
 
-        _ = calib_prep(
-            names_copy,
+        calib_prep(
             test_dict,
+            where_apply_calib=calib_location,
             num_classes=num_classes,
             device=device,
             conf_thres=conf_thres,
             iou_thres_obj=iou_thres_obj,
             iou_thres_class=iou_thres_class,
             obj_calib=calib_obj,
-            class_calib=calib_class,
-            calib_location=calib_location,
+            class_calib=calib_class
         )
 
         # Calibration OBJ
         if calib_obj:
             print("Calibrating objectness score")
-            names_copy = names.copy()
-            obj_y_true_CALIB, obj_y_pred_CALIB = collect_data_obj(calib_dict, names=names)
+            obj_y_true_CALIB, obj_y_pred_CALIB = collect_data_obj(calib_dict, where_apply_calib=calib_location)
             obj_fitted_calibrators = fitting_obj_calibrators(obj_y_true_CALIB, obj_y_pred_CALIB, calibrator)
-            obj_y_pred_CALIBRATED = predict_obj_conf(test_dict, obj_fitted_calibrators, names=names)
-            names[1] = names[1]+"_calib_obj_score"
+            obj_y_pred_CALIBRATED = predict_obj_conf(test_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
+            names[1] = "after_nms_calib_obj_score"
             if plots is not None:
                 fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
-                obj_y_true_TEST, obj_y_pred_TEST = collect_data_obj(test_dict, names=names_copy)
+                obj_y_true_TEST, obj_y_pred_TEST = collect_data_obj(test_dict, where_apply_calib=calib_location)
                 draw_reliability_graph(obj_y_pred_TEST, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
                 draw_reliability_graph(obj_y_pred_CALIBRATED, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                 sav_fig_name = os.path.join(plots, "plot_ece_obj_"+calib_location+".png")
@@ -750,40 +747,38 @@ def calibration(
 
         if calib_class:
             print("Calibrating classe scores")
-            names_copy = names.copy()
-            class_y_true_CALIB, class_y_pred_CALIB = collect_data_class(calib_dict, num_classes=num_classes, names=names)
+            class_y_true_CALIB, class_y_pred_CALIB = collect_data_class(calib_dict, num_classes=num_classes, where_apply_calib=calib_location)
             class_fitted_calibrators = fitting_class_calibrators(class_y_true_CALIB, class_y_pred_CALIB, calibrator, num_classes=num_classes, perc=0.6)
-            class_y_pred_CALIBRATED = predict_class_conf(test_dict, class_fitted_calibrators, num_classes, names=names)
-            names[2] = names[2]+"_calib_class_score"
+            class_y_pred_CALIBRATED = predict_class_conf(test_dict, class_fitted_calibrators, num_classes, calib_location)
+            names[2] = "after_nms_calib_class_score"
             if plots is not None:
                 for i in range(num_classes):
                     fig, (axs1, axs2) = plt.subplots(1, 2, figsize=(12, 6))
-                    class_y_true_TEST, class_y_pred_TEST = collect_data_class(test_dict, num_classes=num_classes, names=names_copy)
+                    class_y_true_TEST, class_y_pred_TEST = collect_data_class(test_dict, num_classes=num_classes, where_apply_calib=calib_location)
                     draw_reliability_graph(class_y_pred_TEST[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
                     draw_reliability_graph(class_y_pred_CALIBRATED[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                     sav_fig_name = os.path.join(plots, "plot_ece_class"+str(i)+"_"+calib_location+".png")
                     plt.savefig(sav_fig_name)
                     plt.close()
-
+                
         if calib_location=="before_nms":
+            print("Running NMS")
             if calib_obj:
-                _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, names=names_copy)
+                _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, where_apply_calib=calib_location)
+                name_pred_obj = calib_location+"_calib_obj_score"
+            else:
+                name_pred_obj = calib_location+"_obj_score_idx"
+
             if calib_class:
-                _ = predict_class_conf(calib_dict, class_fitted_calibrators, num_classes, names=names_copy)
-        return names
-    else:
-        for image_path in calib_dict:
-            len_obj_ = len(np.where(calib_dict[image_path][names[1]] > conf_thres)[0])
-            if len_obj_>0:
-                calib_dict[image_path]["has_detec"] = 1
+                _ = predict_class_conf(calib_dict, class_fitted_calibrators, num_classes, calib_location)
+                name_pred_class = calib_location+"_calib_class_score"
             else:
-                calib_dict[image_path]["has_detec"] = 0
-        for image_path in test_dict:
-            len_obj_ = len(np.where(test_dict[image_path][names[1]] > conf_thres)[0])
-            if len_obj_>0:
-                test_dict[image_path]["has_detec"] = 1
-            else:
-                test_dict[image_path]["has_detec"] = 0
+                name_pred_class = calib_location+"_class_score_idx"
+
+            name_preds = ["pred_bbox_xywh_idx", name_pred_obj, name_pred_class]
+            NMS(dataloader, calib_dict, name_preds=name_preds, num_classes=num_classes, opt=opt, device=device)
+            NMS(dataloader, test_dict, name_preds=name_preds, num_classes=num_classes, opt=opt, device=device)
+
         return names
             
 
@@ -791,11 +786,11 @@ def get_annotations_from_dict(dict_, device):
     labels = []
     for path in dict_:
         values_ = dict_[path]
-        if values_["has_detec"]==1:
+        if "idx" in values_.keys():
             label_ = torch.cat(
                 (
-                    torch.tensor(values_["annot_class"], device=device),
-                    torch.tensor(values_["annot_bbox_xyxy_scaled"], device=device),
+                    torch.tensor(values_["true_class"], device=device),
+                    torch.tensor(values_["true_bbox_xyxy_scaled"], device=device),
                 ),
                 dim=1
             )
@@ -808,7 +803,7 @@ def get_preds_from_dict(dict_, names, device):
     detections = []
     for path in dict_:
         values_ = dict_[path]
-        if values_["has_detec"]==1:
+        if "idx" in values_.keys():
             detection_ = torch.cat(
                 (
                     torch.tensor(values_[names[0]], device=device),
@@ -823,7 +818,7 @@ def get_preds_from_dict(dict_, names, device):
 
 
 
-def calc_mAP(target_dir, names, device, title, plots=False):
+def calc_mAP(target_dir, names, device, plots=False):
     test_dict = {}
     file_test = os.path.join(target_dir, "test_dict.pickle")
     if os.path.getsize(file_test) > 0:      
@@ -863,33 +858,32 @@ def calc_mAP(target_dir, names, device, title, plots=False):
 
         argmax_ = test_[:, 5:].clone().argmax(axis=1).reshape(-1, 1)
         testn = torch.cat((test_[:, :5], argmax_), 1)
+        print(np.round(testn.cpu().numpy()), 4)
+        print(np.round(annot_.cpu().numpy()), 4)
         correct = process_batch(testn, annot_, iouv)
         stats.append((correct, testn[:, 4], testn[:, 5], annot_[:, 0]))  # (correct, conf, pcls, tcls)
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
 
-    with open(f'{target_dir}/{title}.txt', "a") as file_text:
-        s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
-        file_text.write(s)
-        LOGGER.info(s)
-        if len(stats) and stats[0].any():
-            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
-            ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-            mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-        nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
-        
-        # Print results
-        pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
-        s = pf % ('all', seen, nt.sum(), mp, mr, map50, map)
-        file_text.write(s)
-        LOGGER.info(s)
-        if nt.sum() == 0:
-            LOGGER.warning(f'WARNING ⚠️ no labels found in calibration set, can not compute metrics without labels')
+    s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
+    LOGGER.info(s)
+    if len(stats) and stats[0].any():
+        print("inside")
+        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
+        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+    nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
 
-        # Print results per class
-        if nc < 50 and nc > 1 and len(stats):
-            for i, c in enumerate(ap_class):
-                s = pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i])
-                file_text.write(s)
-                LOGGER.info(s)
+    # Print results
+    pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
+    LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+    if nt.sum() == 0:
+        LOGGER.warning(f'WARNING ⚠️ no labels found in calibration set, can not compute metrics without labels')
+
+    s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
+    LOGGER.info(s)
+    # Print results per class
+    if nc < 50 and nc > 1 and len(stats):
+        for i, c in enumerate(ap_class):
+            LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))

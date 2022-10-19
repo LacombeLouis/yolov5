@@ -10,6 +10,7 @@ Usage - config:
 import sys
 from pathlib import Path
 import os
+from sklearn.utils.fixes import config_context
 from torch.distributed import pickle
 import yaml
 import pickle
@@ -23,8 +24,8 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from utils.general import LOGGER, Profile, split_dict, increment_path, print_args
-from utils.calibration_utils import (
-    setup_data_model, get_yolo_predictions, get_calibrator, calibration, calc_mAP, NMS
+from utils.calibration_utils_OLD import (
+    setup_data_model, get_yolo_predictions, get_calibrator, calibration, calc_mAP
     )
 from utils.torch_utils import  smart_inference_mode
 
@@ -51,10 +52,6 @@ def run(
     save_dir = increment_path(Path(config.project) / config.name / f'calibrate_{str(now.year).zfill(4)}_{str(now.month).zfill(2)}_{str(now.day).zfill(2)}__{str(now.hour).zfill(2)}_{str(now.minute).zfill(2)}', exist_ok=config.exist_ok, mkdir=True)  # increment run
     
     d_ = {
-        "FILE": str(FILE),
-        "save_dir": str(save_dir),
-        "nc": model.model.nc,
-        "names": model.names,
         "conf_thres": conf_thres,
         "iou_thres_obj": iou_thres_obj,
         "iou_thres_class": iou_thres_class,
@@ -62,6 +59,10 @@ def run(
         "where_apply_calib_class": where_apply_calib_class,
         "calibrator": calibrator,
         "size_test": size_test,
+        "save_dir": str(save_dir),
+        "nc": model.model.nc,
+        "names": model.names,
+        "FILE": str(FILE)
     }
     with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
         yaml.dump(d_, file)
@@ -76,10 +77,14 @@ def run(
         print("Length calib dict: ", len(calib_dict), " and length calib dict: ", len(test_dict))
 
     calibrator = get_calibrator(calibrator)
+
     calib_location = "before_nms"
     LOGGER.info(f'\nStarting the calibrations: {calib_location}...')
     calib_obj = (where_apply_calib_obj == calib_location)
     calib_class = (where_apply_calib_class == calib_location)
+
+    names = ["after_nms_bbox_xyxy_scaled", "after_nms_obj_score", "after_nms_class_score"]
+    names_after = ["after_nms_bbox_xyxy_scaled", "after_nms_obj_score_idx", "after_nms_class_score_idx"]
 
     if plots:
         os.mkdir(os.path.join(save_dir, "images"))
@@ -89,7 +94,7 @@ def run(
 
     with dt[1]:
         names_after = calibration(
-            ["bbox_xywh", "obj", "class", "bbox_xyxy_scaled"],
+            names_after,
             calib_location,
             calib_obj,
             calib_class,
@@ -99,19 +104,12 @@ def run(
             conf_thres,
             iou_thres_obj,
             iou_thres_class,
+            dataloader,
             config,
             num_classes,
             device,
             plots
         )
-
-    print("NMS... test dict attributes: ",test_dict[list(test_dict.keys())[0]].keys())
-    print(names_after)
-    name_preds = names_after.copy()
-    names_after = [names_after[0]+"_nms", names_after[1]+"_nms", names_after[2]+"_nms", names_after[3]+"_nms"]
-    NMS(names_after, dataloader, calib_dict, name_preds=name_preds, num_classes=num_classes, opt=config, device=device)
-    NMS(names_after, dataloader, test_dict, name_preds=name_preds, num_classes=num_classes, opt=config, device=device)
-    names_after[0] = names_after[3]+"_scaled"
 
     calib_location = "after_nms"
     LOGGER.info(f'\nStarting the calibrations: {calib_location}...')
@@ -130,6 +128,7 @@ def run(
             conf_thres,
             iou_thres_obj,
             iou_thres_class,
+            dataloader,
             config,
             num_classes,
             device,
@@ -148,10 +147,12 @@ def run(
             pickle.dump(test_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     print("Original Results")
-    calc_mAP(save_dir, ["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], device, title="nms", plots=False)
+    calc_mAP(save_dir, names, device, plots=False)
 
-    print("Calibrated results --> objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
-    calc_mAP(save_dir, names_after, device, title="calib_nms", plots=False)
+    print("Calibrated results: objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
+    calc_mAP(save_dir, names_after, device, plots=False)
+
+
 
 def parse_opt():
     parser = ArgumentParser()
