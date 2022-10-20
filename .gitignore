@@ -1,14 +1,14 @@
 # Repo-specific GitIgnore ----------------------------------------------------------------------------------------------
 *.jpg
 *.jpeg
-*.png
+# *.png
 *.bmp
 *.tif
 *.tiff
 *.heic
 *.JPG
 *.JPEG
-*.PNG
+# *.PNG
 *.BMP
 *.TIF
 *.TIFF
@@ -24,7 +24,7 @@
 !cfg/yolov3*.cfg
 
 storage.googleapis.com
-runs/*
+# runs/*
 data/*
 data/images/*
 !data/*.yaml
@@ -35,12 +35,12 @@ data/images/*
 !data/images/bus.jpg
 !data/*.sh
 
-results*.csv
+# results*.csv
 
 # Datasets -------------------------------------------------------------------------------------------------------------
 coco/
 coco128/
-VOC/
+# VOC/
 
 # MATLAB GitIgnore -----------------------------------------------------------------------------------------------------
 *.m~
@@ -49,7 +49,7 @@ VOC/
 
 # Neural Network weights -----------------------------------------------------------------------------------------------
 *.weights
-*.pt
+# *.pt
 *.pb
 *.onnx
 *.engine
@@ -91,6 +91,7 @@ wheels/
 /wandb/
 .installed.cfg
 *.egg
+.history
 
 
 # PyInstaller
