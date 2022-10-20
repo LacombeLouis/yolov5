@@ -73,7 +73,7 @@ def run(
     with dt[0]:
         data_dict = get_yolo_predictions(dataloader, model, config, device, dt)
         calib_dict, test_dict = split_dict(data_dict, size_test)
-        print("Length calib dict: ", len(calib_dict), " and length calib dict: ", len(test_dict))
+        print("Length calib dict: ", len(calib_dict), " and length test dict: ", len(test_dict))
 
     calibrator = get_calibrator(calibrator)
     calib_location = "before_nms"
