@@ -85,7 +85,7 @@ def setup_data_model(opt, ROOT):
     return dataloader, model, device, dt
 
 def get_yolo_predictions(dataloader, model, opt, device, dt):
-    count = 0
+    # count = 0
     data_dict = {}
     nc = model.model.nc
     pbar = tqdm(dataloader, desc=('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95'), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -150,9 +150,9 @@ def get_yolo_predictions(dataloader, model, opt, device, dt):
         data_dict[paths[0]]['annot_bbox'] = targets[:, 2:].clone().cpu().numpy()
         data_dict[paths[0]]['annot_class'] = targets[:, 1:2].clone().cpu().numpy()
 
-        if count > 20:
-            break
-        count+=1
+        # if count > 20:
+        #     break
+        # count+=1
     return data_dict
 
 
