@@ -1,0 +1,10 @@
+name: mapie_env
+channels:
+    - defaults
+    # - conda-forge
+dependencies:
+    - mapie
+    - pandas
+    - scikit-learn
+    - matplotlib
+    - lightgbm
