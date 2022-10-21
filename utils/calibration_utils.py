@@ -730,6 +730,8 @@ def calibration(
             class_calib=calib_class,
             calib_location=calib_location,
         )
+        
+        names_copy_deep = names.copy()
 
         # Calibration OBJ
         if calib_obj:
@@ -767,9 +769,9 @@ def calibration(
 
         if calib_location=="before_nms":
             if calib_obj:
-                _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, names=names_copy)
+                _ = predict_obj_conf(calib_dict, obj_fitted_calibrators, names=names_copy_deep)
             if calib_class:
-                _ = predict_class_conf(calib_dict, class_fitted_calibrators, num_classes, names=names_copy)
+                _ = predict_class_conf(calib_dict, class_fitted_calibrators, num_classes, names=names_copy_deep)
         return names
     else:
         for image_path in calib_dict:
