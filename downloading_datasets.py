@@ -1,26 +1,61 @@
 import yaml
 
-with open("data/coco.yaml", "r") as f:
+with open("data/SKU-110K.yaml", "r") as f:
     data = yaml.load(f, Loader=yaml.FullLoader)
 
 names_ = data["names"]
 path_ = data["path"]
 
-# COCO
-from utils.general import download, Path
 
-# Download labels
-segments = False  # segment or box labels
+import shutil
+from tqdm import tqdm
+from utils.general import np, pd, Path, download, xyxy2xywh
+
+
+# Download
 dir = Path(path_)  # dataset root dir
-url = 'https://github.com/ultralytics/yolov5/releases/download/v1.0/'
-urls = [url + ('coco2017labels-segments.zip' if segments else 'coco2017labels.zip')]  # labels
-download(urls, dir=dir.parent)
+parent = Path(dir.parent)  # download dir
+urls = ['http://trax-geometry.s3.amazonaws.com/cvpr_challenge/SKU110K_fixed.tar.gz']
+download(urls, dir=parent, delete=False)
 
-# Download data
-urls = ['http://images.cocodataset.org/zips/train2017.zip',  # 19G, 118k images
-        'http://images.cocodataset.org/zips/val2017.zip',  # 1G, 5k images
-        'http://images.cocodataset.org/zips/test2017.zip']  # 7G, 41k images (optional)
-download(urls, dir=dir / 'images', threads=3)
+# Rename directories
+if dir.exists():
+    shutil.rmtree(dir)
+(parent / 'SKU110K_fixed').rename(dir)  # rename dir
+(dir / 'labels').mkdir(parents=True, exist_ok=True)  # create labels dir
+
+# Convert labels
+names = 'image', 'x1', 'y1', 'x2', 'y2', 'class', 'image_width', 'image_height'  # column names
+for d in 'annotations_train.csv', 'annotations_val.csv', 'annotations_test.csv':
+    x = pd.read_csv(dir / 'annotations' / d, names=names).values  # annotations
+    images, unique_images = x[:, 0], np.unique(x[:, 0])
+    with open((dir / d).with_suffix('.txt').__str__().replace('annotations_', ''), 'w') as f:
+        f.writelines(f'./images/{s}\n' for s in unique_images)
+    for im in tqdm(unique_images, desc=f'Converting {dir / d}'):
+        cls = 0  # single-class dataset
+        with open((dir / 'labels' / im).with_suffix('.txt'), 'a') as f:
+            for r in x[images == im]:
+                w, h = r[6], r[7]  # image width, height
+                xywh = xyxy2xywh(np.array([[r[1] / w, r[2] / h, r[3] / w, r[4] / h]]))[0]  # instance
+                f.write(f"{cls} {xywh[0]:.5f} {xywh[1]:.5f} {xywh[2]:.5f} {xywh[3]:.5f}\n")  # write label
+
+
+
+# # COCO
+# from utils.general import download, Path
+
+# # Download labels
+# segments = False  # segment or box labels
+# dir = Path(path_)  # dataset root dir
+# url = 'https://github.com/ultralytics/yolov5/releases/download/v1.0/'
+# urls = [url + ('coco2017labels-segments.zip' if segments else 'coco2017labels.zip')]  # labels
+# download(urls, dir=dir.parent)
+
+# # Download data
+# urls = ['http://images.cocodataset.org/zips/train2017.zip',  # 19G, 118k images
+#         'http://images.cocodataset.org/zips/val2017.zip',  # 1G, 5k images
+#         'http://images.cocodataset.org/zips/test2017.zip']  # 7G, 41k images (optional)
+# download(urls, dir=dir / 'images', threads=3)
 
 
 # # xView

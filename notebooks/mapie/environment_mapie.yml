@@ -1,7 +1,7 @@
 name: mapie_env
 channels:
     - defaults
-    # - conda-forge
+    - conda-forge
 dependencies:
     - mapie
     - pandas
