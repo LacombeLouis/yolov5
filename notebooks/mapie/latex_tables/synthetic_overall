@@ -1,0 +1,11 @@
+\begin{tabular}{lrrrrrrrr}
+\toprule
+{} &  Coverage &    Width &  Avg. coverage per bin (pb) &  Std. coverage pb &  Median coverage pb &  Avg. width pb &  Std. width pb &  Median width pb \\
+Method        &           &          &                             &                   &                     &                &                &                  \\
+\midrule
+CQR           &    0.7970 &  29.3829 &                      0.7973 &            0.0554 &              0.7986 &        29.3783 &        22.1913 &          21.6539 \\
+CV+           &    0.9089 &  26.6531 &                      0.9092 &            0.0739 &              0.9319 &        26.6540 &         0.8571 &          26.7622 \\
+Jackknife+-AB &    0.8233 &  14.2128 &                      0.8236 &            0.1425 &              0.8759 &        14.2127 &         0.1263 &          14.2252 \\
+Naive         &    0.6783 &  15.3218 &                      0.6785 &            0.1291 &              0.6919 &        15.3218 &         0.0000 &          15.3218 \\
+\bottomrule
+\end{tabular}
