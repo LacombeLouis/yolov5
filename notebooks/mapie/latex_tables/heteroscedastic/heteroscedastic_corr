@@ -1,0 +1,8 @@
+\begin{tabular}{lrr}
+\toprule
+{} &         0 &         y \\
+\midrule
+0 &  1.000000 &  0.834827 \\
+y &  0.834827 &  1.000000 \\
+\bottomrule
+\end{tabular}
