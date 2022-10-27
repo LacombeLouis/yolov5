@@ -150,6 +150,10 @@ def run(
     print("Original Results")
     calc_mAP(save_dir, ["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], device, title="nms", plots=False)
 
+    d_["names_after"] = names_after
+    with open(os.path.join(save_dir, 'var2.yaml'), 'w') as file:
+        yaml.dump(d_, file)
+
     print("Calibrated results --> objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
     calc_mAP(save_dir, names_after, device, title="calib_nms", plots=False)
 
