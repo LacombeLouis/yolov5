@@ -722,6 +722,7 @@ def calc_mAP(target_dir, names, device, title, plots=False):
     with open(f'{target_dir}/{title}.txt', "a") as file_text:
         s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
         file_text.write(s)
+        file_text.write("\n")
         LOGGER.info(s)
         if len(stats) and stats[0].any():
             tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
@@ -733,6 +734,7 @@ def calc_mAP(target_dir, names, device, title, plots=False):
         pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
         s = pf % ('all', seen, nt.sum(), mp, mr, map50, map)
         file_text.write(s)
+        file_text.write("\n")
         LOGGER.info(s)
         if nt.sum() == 0:
             LOGGER.warning(f'WARNING ⚠️ no labels found in calibration set, can not compute metrics without labels')
@@ -742,4 +744,5 @@ def calc_mAP(target_dir, names, device, title, plots=False):
             for i, c in enumerate(ap_class):
                 s = pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i])
                 file_text.write(s)
+                file_text.write("\n")
                 LOGGER.info(s)

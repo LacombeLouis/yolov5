@@ -31,7 +31,7 @@ from utils.torch_utils import  smart_inference_mode
 @smart_inference_mode()
 def run(
         config=ROOT / 'config/opt/opt_Visdrone_detect_S_Hyp0.yaml',  
-        conf_thres=0.001,
+        conf_thres=0.02,
         iou_thres_obj=0.60,
         iou_thres_class=0.30,
         where_apply_calib_obj='before_nms', 
@@ -144,12 +144,12 @@ def run(
         with open(f'{save_dir}/test_dict.pickle', 'wb') as f:
             pickle.dump(test_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print("Original Results")
-    calc_mAP(save_dir, ["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], device, title="nms", plots=False)
-
     d_["names_after"] = names_after
     with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
         yaml.dump(d_, file)
+
+    print("Original Results")
+    calc_mAP(save_dir, ["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], device, title="nms", plots=False)
 
     print("Calibrated results --> objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
     calc_mAP(save_dir, names_after, device, title="calib_nms", plots=False)
@@ -157,7 +157,7 @@ def run(
 def parse_opt():
     parser = ArgumentParser()
     parser.add_argument('--config', type=str, default=ROOT / 'config/opt/opt_Visdrone_detect_S_Hyp0.yaml', help='config_file.yaml path')
-    parser.add_argument('--conf_thres', type=float, default=0.001, help='confidence threshold')
+    parser.add_argument('--conf_thres', type=float, default=0.02, help='confidence threshold')
     parser.add_argument('--iou_thres_obj', type=float, default=0.6, help='Objectness IoU threshold')
     parser.add_argument('--iou_thres_class', type=float, default=0.3, help='Class IoU threshold')
     parser.add_argument('--where_apply_calib_obj', type=str, default='before_nms', help='where to apply objectness calibration')
