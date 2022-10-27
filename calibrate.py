@@ -63,9 +63,6 @@ def run(
         "calibrator": calibrator,
         "size_test": size_test,
     }
-    with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
-        yaml.dump(d_, file)
-
     with open(os.path.join(save_dir, 'config.yaml'), 'w') as file:
         yaml.dump(config, file)
 
@@ -151,7 +148,7 @@ def run(
     calc_mAP(save_dir, ["bbox_xyxy_scaled_nms", "obj_nms", "class_nms"], device, title="nms", plots=False)
 
     d_["names_after"] = names_after
-    with open(os.path.join(save_dir, 'var2.yaml'), 'w') as file:
+    with open(os.path.join(save_dir, 'var.yaml'), 'w') as file:
         yaml.dump(d_, file)
 
     print("Calibrated results --> objectness calibration: ",  where_apply_calib_obj, " & class calibration: ", where_apply_calib_class)
