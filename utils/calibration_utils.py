@@ -193,52 +193,53 @@ def calib_prep(names, dict_, num_classes, device, conf_thres, iou_thres_obj, iou
 
     names = [names[0]+add_name, names[1]+add_name, names[2]+add_name, names[3]+add_name]
     for i, image_path in enumerate(tqdm(dict_)):
-        objectness_idx = np.where(dict_[image_path][names_copy[1]] > conf_thres)[0]
-        num_obj_ = len(objectness_idx)
+        if names_copy[0] in dict_[image_path].keys():
+            objectness_idx = np.where(dict_[image_path][names_copy[1]] > conf_thres)[0]
+            num_obj_ = len(objectness_idx)
 
-        # If no bboxs have the matching criterion, then forget this image
-        if num_obj_==0:
-            dict_[image_path]["has_detec"] = 0
-        else:
-            dict_[image_path]["has_detec"] = 1
-            dict_[image_path][names[0]] = dict_[image_path][names_copy[0]][objectness_idx]
-            dict_[image_path][names[1]] = dict_[image_path][names_copy[1]][objectness_idx]
-            dict_[image_path][names[2]] = dict_[image_path][names_copy[2]][objectness_idx]
-            
-            if calib_location=="before_nms":
-                dict_[image_path][names[3]] = dict_[image_path][names_copy[3]][objectness_idx]
-                iou_cross = box_iou(
-                    torch.tensor(dict_[image_path][names[3]], device=device),
-                    torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
-                ).cpu().numpy()
+            # If no bboxs have the matching criterion, then forget this image
+            if num_obj_==0:
+                dict_[image_path]["has_detec"] = 0
             else:
-                iou_cross = box_iou(
-                    torch.tensor(dict_[image_path][names[0]], device=device),
-                    torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
-                ).cpu().numpy()
+                dict_[image_path]["has_detec"] = 1
+                dict_[image_path][names[0]] = dict_[image_path][names_copy[0]][objectness_idx]
+                dict_[image_path][names[1]] = dict_[image_path][names_copy[1]][objectness_idx]
+                dict_[image_path][names[2]] = dict_[image_path][names_copy[2]][objectness_idx]
+                
+                if calib_location=="before_nms":
+                    dict_[image_path][names[3]] = dict_[image_path][names_copy[3]][objectness_idx]
+                    iou_cross = box_iou(
+                        torch.tensor(dict_[image_path][names[3]], device=device),
+                        torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
+                    ).cpu().numpy()
+                else:
+                    iou_cross = box_iou(
+                        torch.tensor(dict_[image_path][names[0]], device=device),
+                        torch.tensor(dict_[image_path]["annot_bbox_xyxy_scaled"], device=device)
+                    ).cpu().numpy()
 
-            # We want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox.
-            if obj_calib is True:
-                iou_cross_bool = (iou_cross > iou_thres_obj).astype(int)
-                # If there are no annotated bboxs, then all predicted bboxs are wrong.
-                if iou_cross_bool.shape[1] == 0:
-                    dict_[image_path][names[1]+"_obj_y_true"] = np.zeros(len(objectness_idx)).ravel()
-                else:
-                    dict_[image_path][names[1]+"_obj_y_true"] = np.max(iou_cross_bool, axis=1).astype(np.int32).ravel()
-            
-            # For each class, we want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox, then it's accurate for the class.
-            if class_calib is True:
-                iou_cross_bool = (iou_cross > iou_thres_class).astype(int)
-                if iou_cross_bool.shape[1] == 0:
-                    dict_[image_path][names[2]+"_class_y_true"] = np.full((num_classes, num_obj_), 0).tolist()
-                else:
-                    obj_y_true = []
-                    true_label = dict_[image_path]["annot_class"]
-                    for number in range(num_classes):
-                        true_label_bool = (true_label==number)
-                        iou_and_true_label = np.max((iou_cross_bool*true_label_bool.reshape(-1, 1).T), axis=1).astype(np.int32)
-                        obj_y_true.append(iou_and_true_label)
-                    dict_[image_path][names[2]+"_class_y_true"] = obj_y_true
+                # We want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox.
+                if obj_calib is True:
+                    iou_cross_bool = (iou_cross > iou_thres_obj).astype(int)
+                    # If there are no annotated bboxs, then all predicted bboxs are wrong.
+                    if iou_cross_bool.shape[1] == 0:
+                        dict_[image_path][names[1]+"_obj_y_true"] = np.zeros(len(objectness_idx)).ravel()
+                    else:
+                        dict_[image_path][names[1]+"_obj_y_true"] = np.max(iou_cross_bool, axis=1).astype(np.int32).ravel()
+                
+                # For each class, we want to check if there is an annotated bbox that has the minimum IoU with a predicted bbox, then it's accurate for the class.
+                if class_calib is True:
+                    iou_cross_bool = (iou_cross > iou_thres_class).astype(int)
+                    if iou_cross_bool.shape[1] == 0:
+                        dict_[image_path][names[2]+"_class_y_true"] = np.full((num_classes, num_obj_), 0).tolist()
+                    else:
+                        obj_y_true = []
+                        true_label = dict_[image_path]["annot_class"]
+                        for number in range(num_classes):
+                            true_label_bool = (true_label==number)
+                            iou_and_true_label = np.max((iou_cross_bool*true_label_bool.reshape(-1, 1).T), axis=1).astype(np.int32)
+                            obj_y_true.append(iou_and_true_label)
+                        dict_[image_path][names[2]+"_class_y_true"] = obj_y_true
     return names   
 
 
@@ -658,15 +659,16 @@ def get_preds_from_dict(dict_, names, device):
     detections = []
     for path in dict_:
         values_ = dict_[path]
-        if values_["has_detec"]==1:
-            detection_ = torch.cat(
-                (
-                    torch.tensor(values_[names[0]], device=device),
-                    torch.tensor(values_[names[1]], device=device),
-                    torch.tensor(values_[names[2]], device=device),
-                ),
-                dim=1
-            )
+        if (values_["has_detec"]==1):
+            if (values_[names[1]].shape[0] != 0):
+                detection_ = torch.cat(
+                    (
+                        torch.tensor(values_[names[0]], device=device),
+                        torch.tensor(values_[names[1]], device=device),
+                        torch.tensor(values_[names[2]], device=device),
+                    ),
+                    dim=1
+                )
             detections.append(detection_)
     detections_numpy = np.vstack([x.clone().cpu().numpy() for x in detections])
     return detections, detections_numpy
@@ -681,7 +683,6 @@ def calc_mAP(target_dir, names, device, title, plots=False):
             unpickler = pickle.Unpickler(f)
             test_dict = unpickler.load()
 
-    # names = ["after_nms"+"_bbox_xyxy_scaled", "after_nms"+"_obj_score", "after_nms"+"_class_score"]
     test_values, _ = get_preds_from_dict(test_dict, names, device)
     annotation_values, _ = get_annotations_from_dict(test_dict, device)
 

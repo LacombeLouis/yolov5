@@ -64,7 +64,7 @@ def run(
         "size_test": size_test,
     }
     with open(os.path.join(save_dir, 'config.yaml'), 'w') as file:
-        yaml.dump(config, file)
+        yaml.dump(vars(config), file)
 
     dt = Profile(), Profile(), Profile()
     with dt[0]:
@@ -102,8 +102,6 @@ def run(
             plots
         )
 
-    print("NMS... test dict attributes: ",test_dict[list(test_dict.keys())[0]].keys())
-    print(names_after)
     name_preds = names_after.copy()
     names_after = [names_after[0]+"_nms", names_after[1]+"_nms", names_after[2]+"_nms", names_after[3]+"_nms"]
     NMS(names_after, dataloader, calib_dict, name_preds=name_preds, num_classes=num_classes, opt=config, device=device)
