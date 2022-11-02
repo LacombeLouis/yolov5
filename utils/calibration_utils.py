@@ -596,7 +596,7 @@ def calibration(
                 draw_reliability_graph(obj_y_pred_TEST, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
                 draw_reliability_graph(obj_y_pred_CALIBRATED, obj_y_true_TEST, num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                 sav_fig_name = os.path.join(plots, "plot_ece_obj_"+calib_location+".png")
-                plt.savefig(sav_fig_name)
+                plt.savefig(sav_fig_name, bbox_inches="tight")
                 plt.close()
 
         if calib_class:
@@ -613,7 +613,7 @@ def calibration(
                     draw_reliability_graph(class_y_pred_TEST[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Original objectness", axs=axs1)
                     draw_reliability_graph(class_y_pred_CALIBRATED[:, i], class_y_true_TEST[:, i], num_bins=opt.num_bins, strategy="uniform", title="Calibrated objectness", axs=axs2)
                     sav_fig_name = os.path.join(plots, "plot_ece_class"+str(i)+"_"+calib_location+".png")
-                    plt.savefig(sav_fig_name)
+                    plt.savefig(sav_fig_name, bbox_inches="tight")
                     plt.close()
 
         if calib_location=="before_nms":
@@ -624,17 +624,19 @@ def calibration(
         return names
     else:
         for image_path in calib_dict:
-            len_obj_ = len(np.where(calib_dict[image_path][names[1]] > conf_thres)[0])
-            if len_obj_>0:
-                calib_dict[image_path]["has_detec"] = 1
-            else:
-                calib_dict[image_path]["has_detec"] = 0
+            if names[0] in calib_dict[image_path].keys():
+                len_obj_ = len(np.where(calib_dict[image_path][names[1]] > conf_thres)[0])
+                if len_obj_>0:
+                    calib_dict[image_path]["has_detec"] = 1
+                else:
+                    calib_dict[image_path]["has_detec"] = 0
         for image_path in test_dict:
-            len_obj_ = len(np.where(test_dict[image_path][names[1]] > conf_thres)[0])
-            if len_obj_>0:
-                test_dict[image_path]["has_detec"] = 1
-            else:
-                test_dict[image_path]["has_detec"] = 0
+            if names[0] in test_dict[image_path].keys():
+                len_obj_ = len(np.where(test_dict[image_path][names[1]] > conf_thres)[0])
+                if len_obj_>0:
+                    test_dict[image_path]["has_detec"] = 1
+                else:
+                    test_dict[image_path]["has_detec"] = 0
         return names
             
 
